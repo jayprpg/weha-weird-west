@@ -198,6 +198,7 @@ td b{font-weight:600}
 .num{text-align:right;white-space:nowrap}
 .tblcat{font-size:17px;margin:16px 0 6px}
 table.cart td{vertical-align:middle}
+td.loc select{padding:4px 6px;font-size:13px;width:auto}
 .mini{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:var(--ink2);margin-right:8px;white-space:nowrap}
 .mini input{width:auto}
 .flags{white-space:nowrap}
@@ -870,7 +871,14 @@ function derived(ch,st){
   return d;
 }
 function hindSevSt(st,id){ const h=st.hinds.find(x=>x.id===id); return h?h.sev:null; }
-function gearWeight(ch){ return ch.gear.reduce((t,g)=>t+(g.wt||0)*(g.qty||1),0); }
+function isMount(g){ return g.kind==='g' && (g.name==='Horse'||g.name==='Mule'); }
+function mountCap(ch){ return ch.gear.reduce((t,g)=>t+(g.kind==='g'&&g.name==='Horse'?100*(g.qty||1):g.kind==='g'&&g.name==='Mule'?60*(g.qty||1):0),0); }
+function hasMount(ch){ return mountCap(ch)>0; }
+function hasSaddlebags(ch){ return ch.gear.some(g=>g.name==='Saddlebags'); }
+function canStow(g){ return !isMount(g) && !(g.kind==='a' && g.worn); }
+function onHorse(ch,g){ return hasMount(ch) && g.loc==='horse' && canStow(g); }
+function gearWeight(ch){ return ch.gear.reduce((t,g)=>t+(onHorse(ch,g)?0:(g.wt||0)*(g.qty||1)),0); }
+function horseWeight(ch){ return ch.gear.reduce((t,g)=>t+(onHorse(ch,g)?(g.wt||0)*(g.qty||1):0),0); }
 
 /* ---------- powers ---------- */
 function powersAllowed(st){
@@ -1003,7 +1011,9 @@ function validate(ch){
   const left=startMoney(ch)-moneySpent(ch);
   if(left<0) add('error','gear','You\'re $'+fmtMoney(-left)+' over budget.');
   const d=derived(ch,st); const w=gearWeight(ch);
-  if(w>d.load) add('info','gear','You\'re carrying '+fmtNum(w)+' lbs; your limit is '+d.load+' lbs, so you\'re Encumbered (−2 Pace, Agility rolls, and Fatigue rolls) when carrying it all. Horses carry the rest.');
+  if(w>d.load) add('info','gear','You\'re carrying '+fmtNum(w)+' lbs on your person; your limit is '+d.load+' lbs, so you\'re Encumbered (−2 Pace, Agility rolls, and Fatigue rolls).'+(hasMount(ch)?' Pack some of it on your horse.':' A horse or mule could carry the rest.'));
+  if(hasMount(ch) && horseWeight(ch)>mountCap(ch)) add('info','gear','Your animal is carrying '+fmtNum(horseWeight(ch))+' lbs, more than its '+mountCap(ch)+' lb load. It\'s Encumbered (Marshal\'s call).');
+  if(!hasMount(ch) && ch.gear.some(g=>g.loc==='horse')) add('warn','gear','Some gear is marked "on horse," but you don\'t have a horse or mule, so it counts as carried.');
   if(!ch.gear.length) add('warn','gear','No gear yet. Even a drifter needs boots and a gun.');
   // background
   if(!ch.bg.nightmare.trim()) add('warn','background','Write down your Worst Nightmare. Trust us.');
@@ -1186,12 +1196,12 @@ function makePDF(ch){
   y+=6;
 
   /* ----- ARMOR & GEAR ----- */
-  band('Gear & Goods','Cash on hand: $'+fmtMoney(startMoney(ch)-moneySpent(ch))+'   ·   Carried: '+fmtNum(gearWeight(ch))+' / '+d.load+' lbs');
+  band('Gear & Goods','Cash on hand: $'+fmtMoney(startMoney(ch)-moneySpent(ch))+'   ·   On you: '+fmtNum(gearWeight(ch))+' / '+d.load+' lbs'+(hasMount(ch)?'   ·   On horse: '+fmtNum(horseWeight(ch))+' / '+mountCap(ch)+' lbs':''));
   const armor=ch.gear.filter(g=>g.kind==='a');
   armor.forEach(g=>{ const a=DATA.armor.find(x=>x.name===g.name)||{}; entry(g.name+(g.worn?' (worn)':''),'Armor '+a.armor+' · '+a.covers+' · Min Str '+a.minStr,a.notes||'',''); });
   const other=ch.gear.filter(g=>g.kind==='g'||g.kind==='c');
   if(other.length){
-    const items=other.map(g=>{ const it=DATA.gear.find(x=>x.name===g.name); return g.name+(g.qty>1?' ×'+g.qty:'')+(g.cheap?' (el cheapo)':'')+(it&&it.notes?' ('+it.notes.replace(/\.$/,'')+')':''); });
+    const items=other.map(g=>{ const it=DATA.gear.find(x=>x.name===g.name); return g.name+(g.qty>1?' ×'+g.qty:'')+(g.cheap?' (el cheapo)':'')+(onHorse(ch,g)?' [on horse]':'')+(it&&it.notes?' ('+it.notes.replace(/\.$/,'')+')':''); });
     const half=Math.ceil(items.length/2); const colw=CW/2-6;
     const startY=y; let yl=y, yr=y;
     doc.setFont('OS','normal'); doc.setFontSize(8.3);
@@ -1603,9 +1613,9 @@ function stepArcane(ch){
 function stepGear(ch){
   const f=view.f; const tab=f.gtab||'Weapons'; const q=(f.gq||'').toLowerCase();
   const total=startMoney(ch); const left=total-moneySpent(ch);
-  const st=computeState(ch); const d=derived(ch,st); const w=gearWeight(ch);
+  const st=computeState(ch); const d=derived(ch,st); const w=gearWeight(ch); const mount=hasMount(ch); const hw=horseWeight(ch); const cap=mountCap(ch);
   const cart=ch.gear.map(g=>`<tr><td><b>${esc(g.name)}</b>${g.kind==='a'||/Rattler/.test(g.name)?`<label class="mini"><input type="checkbox" data-a="gearFlag" data-key="${g.key}" data-flag="worn" ${g.worn?'checked':''}> worn</label>`:''}</td>
-    <td class="qty"><span class="stepper"><button data-a="gearQty" data-key="${g.key}" data-d="-1">−</button><b>${g.qty}</b><button data-a="gearQty" data-key="${g.key}" data-d="1">+</button></span></td>
+    ${mount&&canStow(g)?`<td class="loc"><select data-change-loc="${g.key}"><option value="">On you</option><option value="horse" ${g.loc==='horse'?'selected':''}>On horse</option></select></td>`:`<td class="loc">${isMount(g)?'<span class="muted small">mount</span>':mount&&g.kind==='a'&&g.worn?'<span class="muted small">worn</span>':''}</td>`}<td class="qty"><span class="stepper"><button data-a="gearQty" data-key="${g.key}" data-d="-1">−</button><b>${g.qty}</b><button data-a="gearQty" data-key="${g.key}" data-d="1">+</button></span></td>
     <td class="num">${g.free?'<span class="muted">free</span>':'$'+fmtMoney(gearItemCost(g))}</td>
     <td class="flags"><label class="mini" title="Half price, but it breaks on a Critical Failure (or gives −1 Persuasion if it's clothing)"><input type="checkbox" data-a="gearFlag" data-key="${g.key}" data-flag="cheap" ${g.cheap?'checked':''}> el cheapo</label><label class="mini" title="Given by an Edge or your Marshal"><input type="checkbox" data-a="gearFlag" data-key="${g.key}" data-flag="free" ${g.free?'checked':''}> free</label></td>
     <td><button class="x" data-a="gearDel" data-key="${g.key}">×</button></td></tr>`).join('');
@@ -1628,10 +1638,11 @@ function stepGear(ch){
   if(ids.includes('agent')) grants.push('Agent: a Gatling pistol (kept hidden) and a badge come free. Add the pistol and tick "free".');
   if(ids.includes('iron_bound')) grants.push('Iron Bound: up to $2,000 of infernal devices or vehicles. Add them and tick "free".');
   return stepHead('Gear','You start with the clothes on your back and <b>$'+fmtMoney(total)+'</b>. Prices are from the Deadlands catalog. Penny-pinchers can buy most things <b>el cheapo</b> (secondhand) at half price, but cheap gear breaks on a Critical Failure, and ratty clothes cost you up to −2 Persuasion. A horse is $150 and a saddle $25, so budget carefully.','Deadlands pp. 14, 25–37')+issues(ch,'gear')+
-  `<div class="meter"><div>Money left: <b class="${left<0?'neg':''}">$${fmtMoney(left)}</b> of $${fmtMoney(total)} · Carrying <b>${fmtNum(w)}</b> of ${d.load} lbs</div><div class="hpinline">Need more? <button class="btn sm ghost" data-a="hp" data-k="money" data-d="1" ${hpEarned(ch)-hpSpent(ch)<1?'disabled':''}>Spend 1 Hindrance point for +$500</button>${ch.hp.money?`<button class="btn sm ghost" data-a="hp" data-k="money" data-d="-1">Undo</button>`:''}</div></div>
+  `<div class="meter"><div>Money left: <b class="${left<0?'neg':''}">$${fmtMoney(left)}</b> of $${fmtMoney(total)} · On you <b class="${w>d.load?'neg':''}">${fmtNum(w)}</b> of ${d.load} lbs${mount?` · On horse <b class="${hw>cap?'neg':''}">${fmtNum(hw)}</b> of ${cap} lbs`:''}</div><div class="hpinline">Need more? <button class="btn sm ghost" data-a="hp" data-k="money" data-d="1" ${hpEarned(ch)-hpSpent(ch)<1?'disabled':''}>Spend 1 Hindrance point for +$500</button>${ch.hp.money?`<button class="btn sm ghost" data-a="hp" data-k="money" data-d="-1">Undo</button>`:''}</div></div>
   ${grants.map(g=>`<div class="note">${esc(g)}</div>`).join('')}
   <h3 class="sect">Your gear</h3>
   ${cart?`<div class="tblwrap"><table class="cart"><tbody>${cart}</tbody></table></div>`:'<p class="muted">Nothing yet.</p>'}
+  ${mount?`<div class="note small">Your ${ch.gear.some(g=>g.name==='Horse')?'horse':'mule'} carries up to ${cap} lbs (by its Strength on the Encumbrance table, SWADE pp. 67, 184–185). Use the <b>On you / On horse</b> menu on each item, or load it all at once.${hasSaddlebags(ch)?'':' Saddlebags ($5) are the usual way to pack it.'}</div><div class="row-wrap"><button class="btn sm" data-a="loadHorse">Pack trail gear on the horse</button><button class="btn sm ghost" data-a="unloadHorse">Unpack everything</button></div>`:`<p class="small muted">Buy a horse or mule and you can pack gear on it so it doesn't count against your own load.</p>`}
   <div class="row-wrap"><button class="btn ghost sm" data-a="kit">+ Add a basic trail outfit (~$22)</button>
   <details class="custom"><summary>+ Add a custom item</summary><div class="form-inline"><input id="cName" placeholder="Item name"><input id="cCost" type="number" min="0" step="0.01" placeholder="Cost $"><input id="cWt" type="number" min="0" step="0.1" placeholder="Weight"><button class="btn sm" data-a="gearCustom">Add</button></div></details></div>
   <h3 class="sect">General store</h3>
@@ -1809,12 +1820,16 @@ const ACT={
   powAdd(ds){ cur().powers.push({id:ds.id,trap:''}); view.keepScroll=true; changed(); },
   powDel(ds){ const ch=cur(); ch.powers=ch.powers.filter(p=>p.id!==ds.id); view.keepScroll=true; changed(); },
   gearAdd(ds){ const ch=cur(); const src= ds.kind==='w'?DATA.weapons: ds.kind==='a'?DATA.armor: DATA.gear; const it=src.find(x=>x.name===ds.name);
-    const ex=ch.gear.find(g=>g.kind===ds.kind&&g.name===ds.name&&!g.cheap&&!g.free); if(ex && ds.kind==='g'){ ex.qty++; } else ch.gear.push({key:uid(),kind:ds.kind,name:it.name,cost:it.cost,wt:it.wt,qty:1,cheap:false,free:false,worn:ds.kind==='a'});
+    const ex=ch.gear.find(g=>g.kind===ds.kind&&g.name===ds.name&&!g.cheap&&!g.free); if(ex && ds.kind==='g'){ ex.qty++; } else ch.gear.push({key:uid(),kind:ds.kind,name:it.name,cost:it.cost,wt:it.wt,qty:1,cheap:false,free:false,worn:ds.kind==='a',loc:(it.name==='Saddle'||it.name==='Saddlebags')?'horse':''});
     view.keepScroll=true; changed(); },
   gearQty(ds){ const g=cur().gear.find(x=>x.key===ds.key); g.qty=Math.max(1,g.qty+(+ds.d)); view.keepScroll=true; changed(); },
   gearDel(ds){ const ch=cur(); ch.gear=ch.gear.filter(x=>x.key!==ds.key); view.keepScroll=true; changed(); },
   gearFlag(ds,el){ const g=cur().gear.find(x=>x.key===ds.key); g[ds.flag]=el.checked; view.keepScroll=true; changed(); },
   gearCustom(){ const n=$('#cName').value.trim(); if(!n) return; const ch=cur(); ch.gear.push({key:uid(),kind:'c',name:n,cost:+$('#cCost').value||0,wt:+$('#cWt').value||0,qty:1,cheap:false,free:false,worn:false,custom:true}); view.keepScroll=true; changed(); },
+  loadHorse(){ const ch=cur(); const keep=['Clothes','Hats','Gun Accessories','Transportation'];
+    ch.gear.forEach(g=>{ if(!canStow(g)) return; if(g.kind==='w'||g.kind==='a') return; const it=DATA.gear.find(x=>x.name===g.name); if(g.name==='Saddle'||g.name==='Saddlebags'||!it||!keep.includes(it.cat)) g.loc='horse'; });
+    view.keepScroll=true; changed(); },
+  unloadHorse(){ cur().gear.forEach(g=>g.loc=''); view.keepScroll=true; changed(); },
   kit(){ const ch=cur(); [['Boots',1],['Trousers/skirt',1],['Shirt/blouse, work',1],['Stetson',1],['Bedroll',1],['Canteen',1],['Trail rations (per day)',3]].forEach(([n,q])=>{ const it=DATA.gear.find(x=>x.name===n); ch.gear.push({key:uid(),kind:'g',name:n,cost:it.cost,wt:it.wt,qty:q,cheap:false,free:false,worn:false}); }); view.keepScroll=true; changed(); },
   advAdd(){ const ch=cur(); const a={key:uid(),kind:''}; ch.advances.push(a); view.f.openAdv=a.key; view.keepScroll=true; changed(); },
   advToggle(ds){ view.f.openAdv= view.f.openAdv===ds.key?null:ds.key; view.keepScroll=true; render(); },
@@ -1859,6 +1874,7 @@ document.addEventListener('change',ev=>{
     if((m=b.match(/^edge:(\w+):opt$/))){ const e=ch.edges.find(x=>x.key===m[1]); if(e) e.opt=t.value; }
     if((m=b.match(/^adv:(\w+):opt$/))){ const a=ch.advances.find(x=>x.key===m[1]); if(a) a.opt=t.value; }
     view.keepScroll=true; changed(); return; }
+  if(t.dataset.changeLoc){ const g=ch.gear.find(x=>x.key===t.dataset.changeLoc); if(g) g.loc=t.value; view.keepScroll=true; changed(); return; }
   if(t.dataset.changeAdv){ const [key,field]=t.dataset.changeAdv.split(':'); const a=ch.advances.find(x=>x.key===key); if(!a) return;
     if(field.startsWith('skills.')){ const j=+field.split('.')[1]; a.skills=a.skills||['','']; let v=t.value; if(v.endsWith('#new')) v=v.replace('#new','#'+uid()); a.skills[j]=v; }
     else { a[field]=t.value; if(field==='edge') a.opt=''; }
